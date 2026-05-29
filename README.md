@@ -1,8 +1,6 @@
 # Excalidraw TRPG ToolKit
 
-Tampermonkey userscript for adding a collapsible TRPG dice roller panel to Excalidraw.
-
-中文名：Excalidraw TRPG工具
+Tampermonkey userscript for adding a TRPG dice roller panel to Excalidraw.
 
 ## Install
 
@@ -18,33 +16,33 @@ Excalidraw TRPG ToolKit adds a dice panel to the bottom-right corner of Excalidr
 
 The canvas log is shared through Excalidraw itself. The panel history only shows your own recent rolls in the current browser.
 
-### Panel
+### Quick Roll
 
-- Collapsed: shows the current expression, latest matching result, and `Roll`.
-- Expanded: shows dice buttons, local history, expression input, reason input, and modifier controls.
-- Triangle button: expand or collapse the panel.
+The collapsed panel is for repeated rolls. It shows the current expression and the latest matching result. Use `Roll` to roll again without opening the panel.
 
-### Rolling
+The modifier control changes the bonus or penalty, such as `d20+3` or `d20-1`.
 
-- Click `d20`, `d12`, `d10`, `d8`, `d6`, `d4`, or `d100` to add one die.
-- Click the `-` beside a die to remove one die.
-- Use `+1` and its `-` button for modifiers, such as `d20+3` or `d20-1`.
-- Edit the expression input directly for advanced expressions, such as `4d6kh3`.
-- Add optional context in `Reason for Roll`.
+Use `Reason for Roll` for action context, such as `Initiative`, `Attack`, or `Stealth`.
 
-Example canvas log:
+### Edit Roll
+
+Expand the panel to change the roll. Dice controls adjust the number of each die. The modifier control changes the bonus or penalty, such as `d20+3` or `d20-1`.
+
+The expression input can also be edited directly for advanced notation, such as `4d6kh3`.
+
+Example log:
 
 ```text
 Alice Initiative d20+3 => 17
 ```
 
-### Canvas Log
+### History
 
-- Results are appended to one Excalidraw text element.
-- The default title is `历史记录`.
-- Renaming the title manually is supported.
-- Only the latest 20 canvas log entries are kept.
-- Player name comes from your Excalidraw collaboration name, or `Anonymous`.
+Each roll is appended to a canvas text element. The default title is `历史记录`; you can rename it. Only the latest 20 canvas log entries are kept.
+
+The expanded panel also shows your own recent rolls for quick reference. Other players' rolls appear in the shared canvas log.
+
+Player name comes from your Excalidraw collaboration name, or `Anonymous`.
 
 ### Dice Notation
 
