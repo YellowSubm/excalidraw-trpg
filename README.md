@@ -9,7 +9,7 @@ Tampermonkey userscript for adding a collapsible dice roller panel to Excalidraw
 3. Paste the contents of `excalidraw-dice.user.js`.
 4. Save the script and open `https://excalidraw.com/`.
 
-The script injects fixed CDN versions of:
+The script loads fixed CDN versions via `@require`:
 
 - `mathjs@11.8.2`
 - `random-js@2.1.0`
@@ -55,7 +55,7 @@ Alice Initiative d20+3 => 17
 - Open the browser console and look for `[excalidraw-dice] userscript boot` and `[excalidraw-dice] UI mounted`.
 - If neither log appears, Tampermonkey did not run the script.
 - If the logs appear but the panel does not, the UI may be hidden behind browser zoom/layout; search the DOM for `#excalidraw-dice-root`.
-- If the panel appears but rolling says the dice library is unavailable, check whether Firefox or an extension blocked the three CDN scripts.
+- If the panel appears but rolling says the dice library is unavailable, check whether Tampermonkey loaded the three `@require` dependencies.
 
 ## Known Risk
 

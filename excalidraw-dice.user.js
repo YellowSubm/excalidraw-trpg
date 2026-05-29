@@ -1,12 +1,15 @@
 // ==UserScript==
 // @name         Excalidraw Dice
 // @namespace    https://excalidraw.com/
-// @version      0.5.8
+// @version      0.6.0
 // @description  Add a collapsible dice roller panel to Excalidraw and write roll logs into the canvas.
 // @author       Codex
 // @match        https://excalidraw.com/*
 // @match        https://app.excalidraw.com/*
 // @match        https://*.excalidraw.com/*
+// @require      https://cdn.jsdelivr.net/npm/mathjs@11.8.2/lib/browser/math.js
+// @require      https://cdn.jsdelivr.net/npm/random-js@2.1.0/dist/random-js.umd.min.js
+// @require      https://cdn.jsdelivr.net/npm/@dice-roller/rpg-dice-roller@5.5.1/lib/umd/bundle.min.js
 // @run-at       document-idle
 // @grant        unsafeWindow
 // ==/UserScript==
@@ -28,11 +31,6 @@
   const MAX_HISTORY_ITEMS = 20;
   const DICE_TYPES = ["d20", "d12", "d10", "d8", "d6", "d4", "d100"];
   const VISUAL_DICE_TYPES = ["d100", "d4", "d6", "d8", "d10", "d12", "d20"];
-  const DICE_LIBRARY_URLS = [
-    "https://unpkg.com/mathjs@11.8.2/lib/browser/math.js",
-    "https://cdn.jsdelivr.net/npm/random-js@2.1.0/dist/random-js.umd.min.js",
-    "https://cdn.jsdelivr.net/npm/@dice-roller/rpg-dice-roller@5.5.1/lib/umd/bundle.min.js",
-  ];
 
   function createDicePool(overrides = {}) {
     const pool = {};
@@ -231,38 +229,30 @@
       }, API_SCAN_INTERVAL_MS);
     }
 
-    function loadScriptIntoPage(url) {
-      return new Promise((resolve, reject) => {
-        const script = document.createElement("script");
-        script.src = url;
-        script.async = false;
-        script.onload = () => resolve();
-        script.onerror = () => reject(new Error(`Failed to load ${url}`));
-        document.head.appendChild(script);
-      });
+    function getDiceRoller() {
+      const candidates = [
+        typeof rpgDiceRoller !== "undefined" ? rpgDiceRoller : null,
+        typeof globalThis !== "undefined" ? globalThis.rpgDiceRoller : null,
+        typeof window !== "undefined" ? window.rpgDiceRoller : null,
+        pageWindow.rpgDiceRoller,
+      ];
+      return candidates.find((candidate) => candidate && candidate.DiceRoll);
     }
 
     async function loadDiceLibraries(onStatus) {
-      if (pageWindow.rpgDiceRoller && pageWindow.rpgDiceRoller.DiceRoll) {
+      onStatus("Checking dice library...");
+      const roller = getDiceRoller();
+      if (roller) {
         diceLibraryReady = true;
+        console.info("[excalidraw-dice] @require dice library ready");
         return;
       }
 
-      onStatus("Loading dice library...");
-      for (const url of DICE_LIBRARY_URLS) {
-        await loadScriptIntoPage(url);
-      }
-
-      if (!pageWindow.rpgDiceRoller || !pageWindow.rpgDiceRoller.DiceRoll) {
-        throw new Error("Dice roller library loaded but is unavailable");
-      }
-
-      diceLibraryReady = true;
-      console.info("[excalidraw-dice] dice library loaded");
+      throw new Error("@require dice library is unavailable");
     }
 
     function rollNotation(notation) {
-      const roller = pageWindow.rpgDiceRoller;
+      const roller = getDiceRoller();
       if (!diceLibraryReady || !roller || !roller.DiceRoll) {
         throw new Error("Dice roller library is not loaded");
       }
