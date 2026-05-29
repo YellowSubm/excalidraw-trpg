@@ -1,15 +1,19 @@
 // ==UserScript==
-// @name         Excalidraw Dice
-// @namespace    https://excalidraw.com/
-// @version      0.6.0
-// @description  Add a collapsible dice roller panel to Excalidraw and write roll logs into the canvas.
-// @author       Codex
+// @name         Excalidraw TRPG ToolKit
+// @name:zh-CN   Excalidraw TRPG工具
+// @namespace    https://github.com/YellowSubm/excalidraw-trpg
+// @version      0.6.1
+// @description  Add a collapsible TRPG dice panel to Excalidraw and write roll logs into the canvas.
+// @description:zh-CN 为 Excalidraw 添加可折叠的 TRPG 骰子面板，并把投掷记录写入画布。
+// @author       YellowSubm
+// @license      Apache-2.0
 // @match        https://excalidraw.com/*
 // @match        https://app.excalidraw.com/*
 // @match        https://*.excalidraw.com/*
 // @require      https://cdn.jsdelivr.net/npm/mathjs@11.8.2/lib/browser/math.js
 // @require      https://cdn.jsdelivr.net/npm/random-js@2.1.0/dist/random-js.umd.min.js
 // @require      https://cdn.jsdelivr.net/npm/@dice-roller/rpg-dice-roller@5.5.1/lib/umd/bundle.min.js
+// @supportURL   https://github.com/YellowSubm/excalidraw-trpg/issues
 // @run-at       document-idle
 // @grant        unsafeWindow
 // ==/UserScript==
