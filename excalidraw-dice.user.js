@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Excalidraw Dice
 // @namespace    https://excalidraw.com/
-// @version      0.4.8
+// @version      0.5.8
 // @description  Add a collapsible dice roller panel to Excalidraw and write roll logs into the canvas.
 // @author       Codex
 // @match        https://excalidraw.com/*
@@ -34,29 +34,87 @@
     "https://cdn.jsdelivr.net/npm/@dice-roller/rpg-dice-roller@5.5.1/lib/umd/bundle.min.js",
   ];
 
-  const state = {
-    expanded: false,
-    expression: DEFAULT_EXPRESSION,
-    reason: "",
-    lastExpression: DEFAULT_LAST_EXPRESSION,
-    lastReason: "",
-    lastResult: "",
-    history: [],
-    dicePool: {
-      d20: 1,
-      d12: 0,
-      d10: 0,
-      d8: 0,
-      d6: 0,
-      d4: 0,
-      d100: 0,
-    },
-    modifier: 0,
-  };
+  function createDicePool(overrides = {}) {
+    const pool = {};
+    for (const die of DICE_TYPES) {
+      const count = Number(overrides[die]);
+      pool[die] = Number.isInteger(count) && count > 0 ? count : 0;
+    }
+    return pool;
+  }
 
-  let cachedApi = null;
-  let scanStartedAt = 0;
-  let scanTimer = null;
+  function createDefaultState() {
+    return {
+      expanded: false,
+      expression: DEFAULT_EXPRESSION,
+      reason: "",
+      lastExpression: DEFAULT_LAST_EXPRESSION,
+      lastReason: "",
+      lastResult: "",
+      history: [],
+      dicePool: createDicePool({ d20: 1 }),
+      modifier: 0,
+    };
+  }
+
+  const PanelStorage = (() => {
+    function normalize(parsed) {
+      const nextState = createDefaultState();
+      const parsedPool = parsed.dicePool && typeof parsed.dicePool === "object" ? parsed.dicePool : null;
+
+      Object.assign(nextState, {
+        expanded: Boolean(parsed.expanded),
+        expression: String(parsed.expression || DEFAULT_EXPRESSION),
+        reason: String(parsed.reason || ""),
+        lastExpression: String(parsed.lastExpression || parsed.expression || DEFAULT_LAST_EXPRESSION),
+        lastReason: String(parsed.lastReason || parsed.reason || ""),
+        lastResult: String(parsed.lastResult || ""),
+        history: Array.isArray(parsed.history) ? parsed.history.slice(-MAX_HISTORY_ITEMS) : [],
+        dicePool: parsedPool ? createDicePool(parsedPool) : createDicePool(),
+        modifier: Number.isFinite(Number(parsed.modifier)) ? Number(parsed.modifier) : 0,
+      });
+
+      if (!parsedPool) {
+        nextState.expression = DEFAULT_EXPRESSION;
+        nextState.modifier = 0;
+      }
+
+      return nextState;
+    }
+
+    function load() {
+      try {
+        return normalize(JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}"));
+      } catch {
+        return createDefaultState();
+      }
+    }
+
+    function save(panelState) {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          expanded: panelState.expanded,
+          expression: panelState.expression,
+          reason: panelState.reason,
+          lastExpression: panelState.lastExpression,
+          lastReason: panelState.lastReason,
+          lastResult: panelState.lastResult,
+          history: panelState.history,
+          dicePool: panelState.dicePool,
+          modifier: panelState.modifier,
+        }),
+      );
+    }
+
+    return {
+      load,
+      save,
+    };
+  })();
+
+  const state = PanelStorage.load();
+
   let root = null;
   let statusNode = null;
   let collapsedSummaryNode = null;
@@ -67,198 +125,168 @@
   let historyNode = null;
   let toggleButton = null;
   let dicePoolRows = new Map();
-  let diceLibraryReady = false;
 
-  function loadState() {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-      const parsedPool = parsed.dicePool && typeof parsed.dicePool === "object" ? parsed.dicePool : {};
-      Object.assign(state, {
-        expanded: Boolean(parsed.expanded),
-        expression: String(parsed.expression || DEFAULT_EXPRESSION),
-        reason: String(parsed.reason || ""),
-        lastExpression: String(parsed.lastExpression || parsed.expression || DEFAULT_LAST_EXPRESSION),
-        lastReason: String(parsed.lastReason || parsed.reason || ""),
-        lastResult: String(parsed.lastResult || ""),
-        history: Array.isArray(parsed.history) ? parsed.history.slice(-MAX_HISTORY_ITEMS) : [],
-        modifier: Number.isFinite(Number(parsed.modifier)) ? Number(parsed.modifier) : 0,
-      });
-      for (const die of DICE_TYPES) {
-        const count = Number(parsedPool[die]);
-        state.dicePool[die] = Number.isInteger(count) && count > 0 ? count : 0;
-      }
-      if (!parsed.dicePool) {
-        state.expression = DEFAULT_EXPRESSION;
-        resetDicePool();
-      }
-    } catch {
-      // Ignore corrupt local state and fall back to defaults.
-    }
-  }
+  const ExcalidrawRuntime = (() => {
+    let cachedApi = null;
+    let scanStartedAt = 0;
+    let scanTimer = null;
+    let diceLibraryReady = false;
 
-  function saveState() {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        expanded: state.expanded,
-        expression: state.expression,
-        reason: state.reason,
-        lastExpression: state.lastExpression,
-        lastReason: state.lastReason,
-        lastResult: state.lastResult,
-        history: state.history,
-        dicePool: state.dicePool,
-        modifier: state.modifier,
-      }),
-    );
-  }
-
-  function isExcalidrawApi(value) {
-    return (
-      value &&
-      typeof value === "object" &&
-      typeof value.updateScene === "function" &&
-      typeof value.getSceneElements === "function" &&
-      value.isDestroyed !== true
-    );
-  }
-
-  function findExcalidrawApi() {
-    if (isExcalidrawApi(cachedApi)) {
-      return cachedApi;
+    function isApi(value) {
+      return (
+        value &&
+        typeof value === "object" &&
+        typeof value.updateScene === "function" &&
+        typeof value.getSceneElements === "function" &&
+        value.isDestroyed !== true
+      );
     }
 
-    const seen = new WeakSet();
-    const stack = [];
+    function findApi() {
+      if (isApi(cachedApi)) {
+        return cachedApi;
+      }
 
-    for (const el of document.querySelectorAll("*")) {
-      for (const key of Object.getOwnPropertyNames(el)) {
-        if (
-          key.startsWith("__reactFiber$") ||
-          key.startsWith("__reactContainer$") ||
-          key.startsWith("_reactFiber$") ||
-          key.startsWith("_reactContainer$")
-        ) {
-          stack.push(el[key]);
-          if (el[key] && el[key].current) {
-            stack.push(el[key].current);
+      const seen = new WeakSet();
+      const stack = [];
+
+      for (const el of document.querySelectorAll("*")) {
+        for (const key of Object.getOwnPropertyNames(el)) {
+          if (
+            key.startsWith("__reactFiber$") ||
+            key.startsWith("__reactContainer$") ||
+            key.startsWith("_reactFiber$") ||
+            key.startsWith("_reactContainer$")
+          ) {
+            stack.push(el[key]);
+            if (el[key] && el[key].current) {
+              stack.push(el[key].current);
+            }
           }
         }
       }
+
+      while (stack.length) {
+        const node = stack.pop();
+        if (!node || typeof node !== "object" || seen.has(node)) {
+          continue;
+        }
+        seen.add(node);
+
+        if (isApi(node)) {
+          cachedApi = node;
+          return cachedApi;
+        }
+        if (isApi(node.api)) {
+          cachedApi = node.api;
+          return cachedApi;
+        }
+        if (isApi(node.stateNode)) {
+          cachedApi = node.stateNode;
+          return cachedApi;
+        }
+        if (isApi(node.stateNode && node.stateNode.api)) {
+          cachedApi = node.stateNode.api;
+          return cachedApi;
+        }
+        if (isApi(node.memoizedProps && node.memoizedProps.excalidrawAPI)) {
+          cachedApi = node.memoizedProps.excalidrawAPI;
+          return cachedApi;
+        }
+
+        if (node.current) stack.push(node.current);
+        if (node.child) stack.push(node.child);
+        if (node.sibling) stack.push(node.sibling);
+        if (node.return) stack.push(node.return);
+        if (node.alternate) stack.push(node.alternate);
+      }
+
+      cachedApi = null;
+      return null;
     }
 
-    while (stack.length) {
-      const node = stack.pop();
-      if (!node || typeof node !== "object" || seen.has(node)) {
-        continue;
+    function ensureApi() {
+      const api = findApi();
+      if (!api) {
+        throw new Error("Excalidraw API is not ready");
       }
-      seen.add(node);
-
-      if (isExcalidrawApi(node)) {
-        cachedApi = node;
-        return cachedApi;
-      }
-      if (isExcalidrawApi(node.api)) {
-        cachedApi = node.api;
-        return cachedApi;
-      }
-      if (isExcalidrawApi(node.stateNode)) {
-        cachedApi = node.stateNode;
-        return cachedApi;
-      }
-      if (isExcalidrawApi(node.stateNode && node.stateNode.api)) {
-        cachedApi = node.stateNode.api;
-        return cachedApi;
-      }
-      if (isExcalidrawApi(node.memoizedProps && node.memoizedProps.excalidrawAPI)) {
-        cachedApi = node.memoizedProps.excalidrawAPI;
-        return cachedApi;
-      }
-
-      if (node.current) stack.push(node.current);
-      if (node.child) stack.push(node.child);
-      if (node.sibling) stack.push(node.sibling);
-      if (node.return) stack.push(node.return);
-      if (node.alternate) stack.push(node.alternate);
+      return api;
     }
 
-    cachedApi = null;
-    return null;
-  }
-
-  function ensureApi() {
-    const api = findExcalidrawApi();
-    if (!api) {
-      throw new Error("Excalidraw API is not ready");
+    function startScan(onStatus) {
+      scanStartedAt = Date.now();
+      scanTimer = window.setInterval(() => {
+        const api = findApi();
+        if (api) {
+          onStatus("Ready");
+          window.clearInterval(scanTimer);
+          scanTimer = null;
+          return;
+        }
+        if (Date.now() - scanStartedAt > API_SCAN_TIMEOUT_MS) {
+          onStatus("API not found");
+          window.clearInterval(scanTimer);
+          scanTimer = null;
+        }
+      }, API_SCAN_INTERVAL_MS);
     }
-    return api;
-  }
 
-  function startApiScan() {
-    scanStartedAt = Date.now();
-    scanTimer = window.setInterval(() => {
-      const api = findExcalidrawApi();
-      if (api) {
-        setStatus("Ready");
-        window.clearInterval(scanTimer);
-        scanTimer = null;
+    function loadScriptIntoPage(url) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = url;
+        script.async = false;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error(`Failed to load ${url}`));
+        document.head.appendChild(script);
+      });
+    }
+
+    async function loadDiceLibraries(onStatus) {
+      if (pageWindow.rpgDiceRoller && pageWindow.rpgDiceRoller.DiceRoll) {
+        diceLibraryReady = true;
         return;
       }
-      if (Date.now() - scanStartedAt > API_SCAN_TIMEOUT_MS) {
-        setStatus("API not found");
-        window.clearInterval(scanTimer);
-        scanTimer = null;
+
+      onStatus("Loading dice library...");
+      for (const url of DICE_LIBRARY_URLS) {
+        await loadScriptIntoPage(url);
       }
-    }, API_SCAN_INTERVAL_MS);
-  }
 
-  function loadScriptIntoPage(url) {
-    return new Promise((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = url;
-      script.async = false;
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error(`Failed to load ${url}`));
-      document.head.appendChild(script);
-    });
-  }
+      if (!pageWindow.rpgDiceRoller || !pageWindow.rpgDiceRoller.DiceRoll) {
+        throw new Error("Dice roller library loaded but is unavailable");
+      }
 
-  async function loadDiceLibraries() {
-    if (pageWindow.rpgDiceRoller && pageWindow.rpgDiceRoller.DiceRoll) {
       diceLibraryReady = true;
-      return;
+      console.info("[excalidraw-dice] dice library loaded");
     }
 
-    setStatus("Loading dice library...");
-    for (const url of DICE_LIBRARY_URLS) {
-      await loadScriptIntoPage(url);
-    }
+    function rollNotation(notation) {
+      const roller = pageWindow.rpgDiceRoller;
+      if (!diceLibraryReady || !roller || !roller.DiceRoll) {
+        throw new Error("Dice roller library is not loaded");
+      }
 
-    if (!pageWindow.rpgDiceRoller || !pageWindow.rpgDiceRoller.DiceRoll) {
-      throw new Error("Dice roller library loaded but is unavailable");
-    }
+      const roll = new roller.DiceRoll(notation);
+      const total = Number(roll.total);
+      if (!Number.isFinite(total)) {
+        throw new Error("Dice expression did not produce a numeric total");
+      }
 
-    diceLibraryReady = true;
-    console.info("[excalidraw-dice] dice library loaded");
-  }
-
-  function rollNotation(notation) {
-    const roller = pageWindow.rpgDiceRoller;
-    if (!diceLibraryReady || !roller || !roller.DiceRoll) {
-      throw new Error("Dice roller library is not loaded");
-    }
-
-    const roll = new roller.DiceRoll(notation);
-    const total = Number(roll.total);
-    if (!Number.isFinite(total)) {
-      throw new Error("Dice expression did not produce a numeric total");
+      return {
+        total,
+        output: String(roll.output || roll.toString()),
+      };
     }
 
     return {
-      total,
-      output: String(roll.output || roll.toString()),
+      ensureApi,
+      hasApi: () => isApi(cachedApi),
+      loadDiceLibraries,
+      rollNotation,
+      startScan,
     };
-  }
+  })();
 
   function getPlayerName(api) {
     try {
@@ -284,105 +312,119 @@
     return Math.floor(Math.random() * 2 ** 31);
   }
 
-  function createTextElement(text) {
-    const fontSize = 20;
-    const lineHeight = 1.25;
-    const lineCount = text.split("\n").length;
-
-    return {
-      id: makeId(),
-      type: "text",
-      x: 80,
-      y: 80,
-      width: 420,
-      height: Math.max(80, Math.ceil(lineCount * fontSize * lineHeight)),
-      angle: 0,
-      strokeColor: "#1e1e1e",
-      backgroundColor: "transparent",
-      fillStyle: "solid",
-      strokeWidth: 2,
-      strokeStyle: "solid",
-      roughness: 1,
-      opacity: 100,
-      groupIds: [],
-      frameId: null,
-      roundness: null,
-      seed: makeNonce(),
-      version: 1,
-      versionNonce: makeNonce(),
-      isDeleted: false,
-      boundElements: null,
-      updated: Date.now(),
-      link: null,
-      locked: false,
-      text,
-      fontSize,
-      fontFamily: 1,
-      textAlign: "left",
-      verticalAlign: "top",
-      containerId: null,
-      originalText: text,
-      lineHeight,
-      autoResize: true,
-      customData: {
-        [LOG_CUSTOM_DATA_KEY]: true,
-      },
-    };
-  }
-
-  function updateTextElement(existing, text) {
-    const fontSize = existing.fontSize || 20;
-    const lineHeight = existing.lineHeight || 1.25;
-    const lineCount = text.split("\n").length;
-
-    return {
-      ...existing,
-      text,
-      originalText: text,
-      height: Math.max(existing.height || 0, Math.ceil(lineCount * fontSize * lineHeight)),
-      version: (existing.version || 1) + 1,
-      versionNonce: makeNonce(),
-      isDeleted: false,
-      updated: Date.now(),
-      customData: {
-        ...(existing.customData || {}),
-        [LOG_CUSTOM_DATA_KEY]: true,
-      },
-    };
-  }
-
-  function appendLogLine(api, line) {
-    const elements = api.getSceneElements();
-    const existing = elements.find(
-      (element) =>
+  const CanvasLog = (() => {
+    function isLiveLogElement(element) {
+      return (
         element &&
         element.isDeleted !== true &&
         element.type === "text" &&
         element.customData &&
-        element.customData[LOG_CUSTOM_DATA_KEY] === true,
-    );
-
-    const text = trimLogText(existing ? `${existing.text}\n${line}` : `${LOG_TITLE}\n${line}`);
-    const logElement = existing ? updateTextElement(existing, text) : createTextElement(text);
-    const nextElements = existing
-      ? elements.map((element) => (element.id === existing.id ? logElement : element))
-      : [...elements, logElement];
-
-    api.updateScene({
-      elements: nextElements,
-      captureUpdate: "IMMEDIATELY",
-    });
-  }
-
-  function trimLogText(text) {
-    const lines = String(text).split("\n");
-    const title = lines[0] || LOG_TITLE;
-    const entries = lines.slice(1);
-    if (entries.length <= MAX_LOG_LINES) {
-      return [title, ...entries].join("\n");
+        element.customData[LOG_CUSTOM_DATA_KEY] === true
+      );
     }
-    return [title, ...entries.slice(-MAX_LOG_LINES)].join("\n");
-  }
+
+    function findElement(elements) {
+      return elements
+        .filter(isLiveLogElement)
+        .sort((a, b) => (b.updated || 0) - (a.updated || 0))[0];
+    }
+
+    function fitTextHeight(element, text) {
+      const fontSize = element.fontSize || 20;
+      const lineHeight = element.lineHeight || 1.25;
+      const lineCount = text.split("\n").length;
+      return Math.max(element.height || 0, Math.ceil(lineCount * fontSize * lineHeight));
+    }
+
+    function createElement(text) {
+      const fontSize = 20;
+      const lineHeight = 1.25;
+
+      return {
+        id: makeId(),
+        type: "text",
+        x: 80,
+        y: 80,
+        width: 420,
+        height: fitTextHeight({ height: 80, fontSize, lineHeight }, text),
+        angle: 0,
+        strokeColor: "#1e1e1e",
+        backgroundColor: "transparent",
+        fillStyle: "solid",
+        strokeWidth: 2,
+        strokeStyle: "solid",
+        roughness: 1,
+        opacity: 100,
+        groupIds: [],
+        frameId: null,
+        roundness: null,
+        seed: makeNonce(),
+        version: 1,
+        versionNonce: makeNonce(),
+        isDeleted: false,
+        boundElements: null,
+        updated: Date.now(),
+        link: null,
+        locked: false,
+        text,
+        fontSize,
+        fontFamily: 1,
+        textAlign: "left",
+        verticalAlign: "top",
+        containerId: null,
+        originalText: text,
+        lineHeight,
+        autoResize: true,
+        customData: {
+          [LOG_CUSTOM_DATA_KEY]: true,
+        },
+      };
+    }
+
+    function updateElement(existing, text) {
+      return {
+        ...existing,
+        text,
+        originalText: text,
+        height: fitTextHeight(existing, text),
+        version: (existing.version || 1) + 1,
+        versionNonce: makeNonce(),
+        isDeleted: false,
+        updated: Date.now(),
+        customData: {
+          ...(existing.customData || {}),
+          [LOG_CUSTOM_DATA_KEY]: true,
+        },
+      };
+    }
+
+    function trimText(text) {
+      const lines = String(text).split("\n");
+      const title = lines[0] || LOG_TITLE;
+      const entries = lines.slice(1);
+      const keptEntries = entries.length > MAX_LOG_LINES ? entries.slice(-MAX_LOG_LINES) : entries;
+      return [title, ...keptEntries].join("\n");
+    }
+
+    function appendLine(api, line) {
+      const elements = api.getSceneElements();
+      const existing = findElement(elements);
+      const text = trimText(existing ? `${existing.text}\n${line}` : `${LOG_TITLE}\n${line}`);
+      const logElement = existing ? updateElement(existing, text) : createElement(text);
+      const nextElements = existing
+        ? elements.map((element) => (element.id === existing.id ? logElement : element))
+        : [...elements, logElement];
+
+      api.updateScene({
+        elements: nextElements,
+        captureUpdate: "IMMEDIATELY",
+      });
+    }
+
+    return {
+      appendLine,
+    };
+  })();
 
   function formatRollLine(playerName, expression, reason, total) {
     const reasonText = reason ? ` ${reason}` : " 投掷";
@@ -404,75 +446,98 @@
     state.history = [...state.history, entry].slice(-MAX_HISTORY_ITEMS);
   }
 
-  function resetDicePool() {
-    for (const die of DICE_TYPES) {
-      state.dicePool[die] = 0;
+  function commitState(options = {}) {
+    PanelStorage.save(state);
+    renderState();
+    if (options.scrollHistory) {
+      scrollHistoryToBottom();
     }
+  }
+
+  const DiceExpression = (() => {
+    function emptyPool() {
+      return createDicePool();
+    }
+
+    function buildFromPool(pool, modifier) {
+      const terms = [];
+      for (const die of DICE_TYPES) {
+        const count = pool[die] || 0;
+        if (count === 1) {
+          terms.push(die);
+        } else if (count > 1) {
+          terms.push(`${count}${die}`);
+        }
+      }
+
+      let expression = terms.join("+");
+      if (modifier > 0) {
+        expression += `${expression ? "+" : ""}${modifier}`;
+      } else if (modifier < 0) {
+        expression += `${modifier}`;
+      }
+      return expression;
+    }
+
+    function parseSimplePool(expression) {
+      const cleanExpression = String(expression || "").replace(/\s+/g, "");
+      const nextPool = emptyPool();
+      let nextModifier = 0;
+
+      if (!cleanExpression) {
+        return { ok: true, pool: nextPool, modifier: nextModifier };
+      }
+
+      const normalized = cleanExpression.replace(/-/g, "+-");
+      const rawTerms = normalized.split("+").filter(Boolean);
+
+      for (const term of rawTerms) {
+        const diceMatch = term.match(/^(\d*)d(4|6|8|10|12|20|100)$/i);
+        if (diceMatch) {
+          const die = `d${diceMatch[2]}`;
+          const count = diceMatch[1] ? Number(diceMatch[1]) : 1;
+          if (!Number.isInteger(count) || count < 1) {
+            return { ok: false };
+          }
+          nextPool[die] += count;
+          continue;
+        }
+
+        if (/^-?\d+$/.test(term)) {
+          nextModifier += Number(term);
+          continue;
+        }
+
+        return { ok: false };
+      }
+
+      return { ok: true, pool: nextPool, modifier: nextModifier };
+    }
+
+    return {
+      buildFromPool,
+      emptyPool,
+      parseSimplePool,
+    };
+  })();
+
+  function resetDicePool() {
+    state.dicePool = DiceExpression.emptyPool();
     state.modifier = 0;
   }
 
-  function buildExpressionFromPool() {
-    const terms = [];
-    for (const die of DICE_TYPES) {
-      const count = state.dicePool[die] || 0;
-      if (count === 1) {
-        terms.push(die);
-      } else if (count > 1) {
-        terms.push(`${count}${die}`);
-      }
-    }
-
-    let expression = terms.join("+");
-    if (state.modifier > 0) {
-      expression += `${expression ? "+" : ""}${state.modifier}`;
-    } else if (state.modifier < 0) {
-      expression += `${state.modifier}`;
-    }
-    return expression;
-  }
-
   function applyPoolToExpression() {
-    state.expression = buildExpressionFromPool();
-    saveState();
-    renderState();
+    state.expression = DiceExpression.buildFromPool(state.dicePool, state.modifier);
+    commitState();
   }
 
   function syncPoolFromExpression(expression) {
-    const cleanExpression = String(expression || "").replace(/\s+/g, "");
-    if (!cleanExpression) {
-      resetDicePool();
-      return true;
-    }
-
-    const normalized = cleanExpression.replace(/-/g, "+-");
-    const rawTerms = normalized.split("+").filter(Boolean);
-    const nextPool = Object.fromEntries(DICE_TYPES.map((die) => [die, 0]));
-    let nextModifier = 0;
-
-    for (const term of rawTerms) {
-      const diceMatch = term.match(/^(\d*)d(4|6|8|10|12|20|100)$/i);
-      if (diceMatch) {
-        const die = `d${diceMatch[2]}`;
-        const count = diceMatch[1] ? Number(diceMatch[1]) : 1;
-        if (!Number.isInteger(count) || count < 1) {
-          return false;
-        }
-        nextPool[die] += count;
-        continue;
-      }
-
-      if (/^-?\d+$/.test(term)) {
-        nextModifier += Number(term);
-        continue;
-      }
-
+    const parsed = DiceExpression.parseSimplePool(expression);
+    if (!parsed.ok) {
       return false;
     }
-
-    for (const die of DICE_TYPES) {
-      state.dicePool[die] = nextPool[die];
-    }
-    state.modifier = nextModifier;
+    state.dicePool = parsed.pool;
+    state.modifier = parsed.modifier;
     return true;
   }
 
@@ -486,38 +551,75 @@
     applyPoolToExpression();
   }
 
-  function performRoll(expression, reason) {
-    const cleanExpression = expression.trim();
-    const cleanReason = reason.trim();
-    if (!cleanExpression) {
-      throw new Error("Please enter a dice expression");
+  function toggleExpanded() {
+    state.expanded = !state.expanded;
+    commitState();
+  }
+
+  function setExpressionFromInput(value) {
+    state.expression = value;
+    if (!syncPoolFromExpression(state.expression)) {
+      resetDicePool();
+    }
+    commitState();
+  }
+
+  function setReasonFromInput(value) {
+    state.reason = value;
+    commitState();
+  }
+
+  function rollCurrent() {
+    onRollClick(state.expression || state.lastExpression || DEFAULT_LAST_EXPRESSION, state.reason);
+  }
+
+  function rollInputExpression() {
+    onRollClick(state.expression, state.reason);
+  }
+
+  const RollWorkflow = (() => {
+    function normalizeRequest(expression, reason) {
+      const cleanExpression = String(expression || "").trim();
+      const cleanReason = String(reason || "").trim();
+      if (!cleanExpression) {
+        throw new Error("Please enter a dice expression");
+      }
+      return { expression: cleanExpression, reason: cleanReason };
     }
 
-    const api = ensureApi();
-    const roll = rollNotation(cleanExpression);
-    const playerName = getPlayerName(api);
-    const line = formatRollLine(playerName, cleanExpression, cleanReason, roll.total);
-    const timestamp = Date.now();
+    function recordLocalResult(request, playerName, total) {
+      addHistoryEntry({
+        playerName,
+        expression: request.expression,
+        reason: request.reason,
+        total,
+        timestamp: Date.now(),
+      });
 
-    appendLogLine(api, line);
-    addHistoryEntry({
-      playerName,
-      expression: cleanExpression,
-      reason: cleanReason,
-      total: roll.total,
-      timestamp,
-    });
+      state.expression = request.expression;
+      state.reason = request.reason;
+      state.lastExpression = request.expression;
+      state.lastReason = request.reason;
+      state.lastResult = String(total);
+      commitState({ scrollHistory: true });
+    }
 
-    state.expression = cleanExpression;
-    state.reason = cleanReason;
-    state.lastExpression = cleanExpression;
-    state.lastReason = cleanReason;
-    state.lastResult = String(roll.total);
-    saveState();
-    renderState();
-    scrollHistoryToBottom();
-    setStatus(roll.output);
-  }
+    function perform(expression, reason) {
+      const request = normalizeRequest(expression, reason);
+      const api = ExcalidrawRuntime.ensureApi();
+      const roll = ExcalidrawRuntime.rollNotation(request.expression);
+      const playerName = getPlayerName(api);
+      const line = formatRollLine(playerName, request.expression, request.reason, roll.total);
+
+      CanvasLog.appendLine(api, line);
+      recordLocalResult(request, playerName, roll.total);
+      setStatus(roll.output);
+    }
+
+    return {
+      perform,
+    };
+  })();
 
   function setStatus(message) {
     if (statusNode) {
@@ -541,6 +643,14 @@
   function renderState() {
     if (!root) return;
 
+    renderPanelVisibility();
+    renderInputs();
+    renderSummary();
+    renderHistory();
+    renderDicePool();
+  }
+
+  function renderPanelVisibility() {
     root.classList.toggle("excalidraw-dice-expanded", state.expanded);
     root.classList.toggle("excalidraw-dice-collapsed", !state.expanded);
 
@@ -553,19 +663,27 @@
       toggleButton.title = state.expanded ? "Collapse dice panel" : "Expand dice panel";
       toggleButton.setAttribute("aria-expanded", String(state.expanded));
     }
+  }
+
+  function renderInputs() {
     if (expressionInput && expressionInput.value !== state.expression) {
       expressionInput.value = state.expression;
     }
     if (reasonInput && reasonInput.value !== state.reason) {
       reasonInput.value = state.reason;
     }
+  }
+
+  function renderSummary() {
     if (collapsedSummaryNode) {
       collapsedSummaryNode.textContent = getCurrentSummary();
     }
     if (collapsedResultNode) {
       collapsedResultNode.textContent = isShowingLastRoll() ? `= ${state.lastResult}` : "";
     }
-    renderHistory();
+  }
+
+  function renderDicePool() {
     for (const [key, row] of dicePoolRows) {
       const count = key === "modifier" ? state.modifier : state.dicePool[key] || 0;
       row.count.textContent = count ? String(count) : "";
@@ -576,7 +694,7 @@
   function onRollClick(expression, reason) {
     try {
       setStatus("Rolling...");
-      performRoll(expression, reason);
+      RollWorkflow.perform(expression, reason);
     } catch (error) {
       setStatus(error && error.message ? error.message : String(error));
     }
@@ -651,6 +769,122 @@
     row.append(minus, die);
     dicePoolRows.set(key, { minus, count });
     return row;
+  }
+
+  function createRootNode() {
+    const rootNode = document.createElement("div");
+    rootNode.id = "excalidraw-dice-root";
+    rootNode.className = "excalidraw-dice-root";
+    for (const eventName of ["pointerdown", "mousedown", "click", "dblclick", "wheel", "keydown", "keyup"]) {
+      rootNode.addEventListener(eventName, (event) => event.stopPropagation());
+    }
+    return rootNode;
+  }
+
+  function createHeaderView() {
+    const header = document.createElement("div");
+    header.className = "excalidraw-dice-header";
+
+    toggleButton = createButton("▸", "excalidraw-dice-toggle", toggleExpanded);
+    toggleButton.setAttribute("aria-label", "Expand dice panel");
+
+    const summary = document.createElement("div");
+    summary.className = "excalidraw-dice-summary";
+
+    collapsedSummaryNode = document.createElement("div");
+    collapsedSummaryNode.className = "excalidraw-dice-summary-main";
+
+    collapsedResultNode = document.createElement("div");
+    collapsedResultNode.className = "excalidraw-dice-summary-result";
+
+    statusNode = document.createElement("div");
+    statusNode.className = "excalidraw-dice-status";
+    statusNode.textContent = "Finding Excalidraw...";
+
+    summary.append(collapsedSummaryNode, collapsedResultNode);
+
+    const headerRoll = createButton("Roll", "excalidraw-dice-roll", rollCurrent);
+
+    header.append(toggleButton, summary, headerRoll);
+    return header;
+  }
+
+  function createDicePoolView() {
+    const pool = document.createElement("div");
+    pool.className = "excalidraw-dice-pool";
+    dicePoolRows = new Map();
+    for (const die of VISUAL_DICE_TYPES) {
+      pool.append(
+        createDicePoolRow(
+          die,
+          die,
+          () => changeDieCount(die, 1),
+          () => changeDieCount(die, -1),
+        ),
+      );
+    }
+    return pool;
+  }
+
+  function createExpressionInput() {
+    const input = document.createElement("input");
+    input.className = "excalidraw-dice-input";
+    input.type = "text";
+    input.spellcheck = false;
+    input.placeholder = "d20+3";
+    input.addEventListener("input", () => {
+      setExpressionFromInput(input.value);
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        rollInputExpression();
+      }
+    });
+    return input;
+  }
+
+  function createHistoryControlsView() {
+    const controls = document.createElement("div");
+    controls.className = "excalidraw-dice-controls";
+
+    historyNode = document.createElement("div");
+    historyNode.className = "excalidraw-dice-history";
+
+    expressionInput = createExpressionInput();
+    controls.append(historyNode, expressionInput);
+    return controls;
+  }
+
+  function createReasonRowView() {
+    const row = document.createElement("div");
+    row.className = "excalidraw-dice-reason-row";
+
+    reasonInput = document.createElement("input");
+    reasonInput.className = "excalidraw-dice-input";
+    reasonInput.type = "text";
+    reasonInput.placeholder = "Reason for Roll";
+    reasonInput.addEventListener("input", () => {
+      setReasonFromInput(reasonInput.value);
+    });
+    reasonInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        rollInputExpression();
+      }
+    });
+
+    const modifierRow = createDicePoolRow("modifier", "+1", () => changeModifier(1), () => changeModifier(-1));
+    modifierRow.classList.add("excalidraw-dice-modifier");
+    row.append(reasonInput, modifierRow);
+    return row;
+  }
+
+  function createExpandedPanelView() {
+    panelNode = document.createElement("div");
+    panelNode.className = "excalidraw-dice-panel";
+    panelNode.append(createDicePoolView(), createHistoryControlsView());
+    return panelNode;
   }
 
   function injectStyles() {
@@ -1018,114 +1252,10 @@
 
     injectStyles();
 
-    root = document.createElement("div");
-    root.id = "excalidraw-dice-root";
-    root.className = "excalidraw-dice-root";
-    for (const eventName of ["pointerdown", "mousedown", "click", "dblclick", "wheel", "keydown", "keyup"]) {
-      root.addEventListener(eventName, (event) => event.stopPropagation());
-    }
-
+    root = createRootNode();
     const card = document.createElement("div");
     card.className = "excalidraw-dice-card";
-
-    const header = document.createElement("div");
-    header.className = "excalidraw-dice-header";
-
-    toggleButton = createButton("▸", "excalidraw-dice-toggle", () => {
-      state.expanded = !state.expanded;
-      saveState();
-      renderState();
-    });
-    toggleButton.setAttribute("aria-label", "Expand dice panel");
-
-    const summary = document.createElement("div");
-    summary.className = "excalidraw-dice-summary";
-
-    collapsedSummaryNode = document.createElement("div");
-    collapsedSummaryNode.className = "excalidraw-dice-summary-main";
-
-    collapsedResultNode = document.createElement("div");
-    collapsedResultNode.className = "excalidraw-dice-summary-result";
-
-    statusNode = document.createElement("div");
-    statusNode.className = "excalidraw-dice-status";
-    statusNode.textContent = "Finding Excalidraw...";
-
-    summary.append(collapsedSummaryNode, collapsedResultNode);
-
-    const headerRoll = createButton("Roll", "excalidraw-dice-roll", () => {
-      onRollClick(state.expression || state.lastExpression || DEFAULT_LAST_EXPRESSION, state.reason);
-    });
-
-    header.append(toggleButton, summary, headerRoll);
-
-    panelNode = document.createElement("div");
-    panelNode.className = "excalidraw-dice-panel";
-
-    const pool = document.createElement("div");
-    pool.className = "excalidraw-dice-pool";
-    dicePoolRows = new Map();
-    for (const die of VISUAL_DICE_TYPES) {
-      pool.append(
-        createDicePoolRow(
-          die,
-          die,
-          () => changeDieCount(die, 1),
-          () => changeDieCount(die, -1),
-        ),
-      );
-    }
-
-    const controls = document.createElement("div");
-    controls.className = "excalidraw-dice-controls";
-
-    historyNode = document.createElement("div");
-    historyNode.className = "excalidraw-dice-history";
-
-    expressionInput = document.createElement("input");
-    expressionInput.className = "excalidraw-dice-input";
-    expressionInput.type = "text";
-    expressionInput.spellcheck = false;
-    expressionInput.placeholder = "d20+3";
-    expressionInput.addEventListener("input", () => {
-      state.expression = expressionInput.value;
-      if (!syncPoolFromExpression(state.expression)) {
-        resetDicePool();
-      }
-      saveState();
-      renderState();
-    });
-    expressionInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        onRollClick(state.expression, state.reason);
-      }
-    });
-
-    reasonInput = document.createElement("input");
-    reasonInput.className = "excalidraw-dice-input";
-    reasonInput.type = "text";
-    reasonInput.placeholder = "Reason for Roll";
-    reasonInput.addEventListener("input", () => {
-      state.reason = reasonInput.value;
-      saveState();
-    });
-    reasonInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        onRollClick(state.expression, state.reason);
-      }
-    });
-
-    const reasonRow = document.createElement("div");
-    reasonRow.className = "excalidraw-dice-reason-row";
-    const modifierRow = createDicePoolRow("modifier", "+1", () => changeModifier(1), () => changeModifier(-1));
-    modifierRow.classList.add("excalidraw-dice-modifier");
-    reasonRow.append(reasonInput, modifierRow);
-
-    controls.append(historyNode, expressionInput);
-    panelNode.append(pool, controls);
-    card.append(panelNode, reasonRow, header);
+    card.append(createExpandedPanelView(), createReasonRowView(), createHeaderView());
     root.append(card);
     document.body.append(root);
     console.info("[excalidraw-dice] UI mounted");
@@ -1134,13 +1264,12 @@
   }
 
   async function boot() {
-    loadState();
     buildUi();
-    startApiScan();
+    ExcalidrawRuntime.startScan(setStatus);
 
     try {
-      await loadDiceLibraries();
-      if (isExcalidrawApi(cachedApi)) {
+      await ExcalidrawRuntime.loadDiceLibraries(setStatus);
+      if (ExcalidrawRuntime.hasApi()) {
         setStatus("Ready");
       }
     } catch (error) {

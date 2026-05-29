@@ -36,7 +36,7 @@ Alice Initiative d20+3 => 17
 
 ## Smoke Tests
 
-- Roll `d20+3`; a `骰子日志` text element should appear on the canvas.
+- Roll `d20+3`; a `历史记录` text element should appear on the canvas.
 - Roll again; the same text element should receive another line.
 - Collapse the panel and press `Roll`; it should roll the current expression from the dice pool/input.
 - Change the expression after rolling; the bottom bar should show the changed expression and hide the old result.
