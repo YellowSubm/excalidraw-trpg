@@ -2,7 +2,7 @@
 // @name         Excalidraw TRPG ToolKit
 // @name:zh-CN   Excalidraw TRPG工具
 // @namespace    https://github.com/YellowSubm/excalidraw-trpg
-// @version      0.6.1
+// @version      0.6.5
 // @description  Add a collapsible TRPG dice panel to Excalidraw and write roll logs into the canvas.
 // @description:zh-CN 为 Excalidraw 添加可折叠的 TRPG 骰子面板，并把投掷记录写入画布。
 // @author       YellowSubm
@@ -23,7 +23,8 @@
 
   console.info("[excalidraw-dice] userscript boot", location.href);
 
-  const pageWindow = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+  const pageWindow =
+    typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   const STORAGE_KEY = "excalidraw-dice:v1";
   const API_SCAN_TIMEOUT_MS = 10000;
   const API_SCAN_INTERVAL_MS = 250;
@@ -62,18 +63,27 @@
   const PanelStorage = (() => {
     function normalize(parsed) {
       const nextState = createDefaultState();
-      const parsedPool = parsed.dicePool && typeof parsed.dicePool === "object" ? parsed.dicePool : null;
+      const parsedPool =
+        parsed.dicePool && typeof parsed.dicePool === "object"
+          ? parsed.dicePool
+          : null;
 
       Object.assign(nextState, {
         expanded: Boolean(parsed.expanded),
         expression: String(parsed.expression || DEFAULT_EXPRESSION),
         reason: String(parsed.reason || ""),
-        lastExpression: String(parsed.lastExpression || parsed.expression || DEFAULT_LAST_EXPRESSION),
+        lastExpression: String(
+          parsed.lastExpression || parsed.expression || DEFAULT_LAST_EXPRESSION,
+        ),
         lastReason: String(parsed.lastReason || parsed.reason || ""),
         lastResult: String(parsed.lastResult || ""),
-        history: Array.isArray(parsed.history) ? parsed.history.slice(-MAX_HISTORY_ITEMS) : [],
+        history: Array.isArray(parsed.history)
+          ? parsed.history.slice(-MAX_HISTORY_ITEMS)
+          : [],
         dicePool: parsedPool ? createDicePool(parsedPool) : createDicePool(),
-        modifier: Number.isFinite(Number(parsed.modifier)) ? Number(parsed.modifier) : 0,
+        modifier: Number.isFinite(Number(parsed.modifier))
+          ? Number(parsed.modifier)
+          : 0,
       });
 
       if (!parsedPool) {
@@ -284,8 +294,11 @@
 
   function getPlayerName(api) {
     try {
-      const collab = JSON.parse(localStorage.getItem("excalidraw-collab") || "{}");
-      const collabUsername = typeof collab.username === "string" ? collab.username.trim() : "";
+      const collab = JSON.parse(
+        localStorage.getItem("excalidraw-collab") || "{}",
+      );
+      const collabUsername =
+        typeof collab.username === "string" ? collab.username.trim() : "";
       if (collabUsername) {
         return collabUsername;
       }
@@ -293,13 +306,19 @@
       // Fall back to app state below.
     }
 
-    const appState = typeof api.getAppState === "function" ? api.getAppState() : {};
-    const username = appState && typeof appState.username === "string" ? appState.username.trim() : "";
+    const appState =
+      typeof api.getAppState === "function" ? api.getAppState() : {};
+    const username =
+      appState && typeof appState.username === "string"
+        ? appState.username.trim()
+        : "";
     return username || "Anonymous";
   }
 
   function makeId() {
-    return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    return (
+      Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)
+    );
   }
 
   function makeNonce() {
@@ -327,7 +346,10 @@
       const fontSize = element.fontSize || 20;
       const lineHeight = element.lineHeight || 1.25;
       const lineCount = text.split("\n").length;
-      return Math.max(element.height || 0, Math.ceil(lineCount * fontSize * lineHeight));
+      return Math.max(
+        element.height || 0,
+        Math.ceil(lineCount * fontSize * lineHeight),
+      );
     }
 
     function createElement(text) {
@@ -396,17 +418,26 @@
       const lines = String(text).split("\n");
       const title = lines[0] || LOG_TITLE;
       const entries = lines.slice(1);
-      const keptEntries = entries.length > MAX_LOG_LINES ? entries.slice(-MAX_LOG_LINES) : entries;
+      const keptEntries =
+        entries.length > MAX_LOG_LINES
+          ? entries.slice(-MAX_LOG_LINES)
+          : entries;
       return [title, ...keptEntries].join("\n");
     }
 
     function appendLine(api, line) {
       const elements = api.getSceneElements();
       const existing = findElement(elements);
-      const text = trimText(existing ? `${existing.text}\n${line}` : `${LOG_TITLE}\n${line}`);
-      const logElement = existing ? updateElement(existing, text) : createElement(text);
+      const text = trimText(
+        existing ? `${existing.text}\n${line}` : `${LOG_TITLE}\n${line}`,
+      );
+      const logElement = existing
+        ? updateElement(existing, text)
+        : createElement(text);
       const nextElements = existing
-        ? elements.map((element) => (element.id === existing.id ? logElement : element))
+        ? elements.map((element) =>
+            element.id === existing.id ? logElement : element,
+          )
         : [...elements, logElement];
 
       api.updateScene({
@@ -521,7 +552,10 @@
   }
 
   function applyPoolToExpression() {
-    state.expression = DiceExpression.buildFromPool(state.dicePool, state.modifier);
+    state.expression = DiceExpression.buildFromPool(
+      state.dicePool,
+      state.modifier,
+    );
     commitState();
   }
 
@@ -564,7 +598,10 @@
   }
 
   function rollCurrent() {
-    onRollClick(state.expression || state.lastExpression || DEFAULT_LAST_EXPRESSION, state.reason);
+    onRollClick(
+      state.expression || state.lastExpression || DEFAULT_LAST_EXPRESSION,
+      state.reason,
+    );
   }
 
   function rollInputExpression() {
@@ -603,7 +640,12 @@
       const api = ExcalidrawRuntime.ensureApi();
       const roll = ExcalidrawRuntime.rollNotation(request.expression);
       const playerName = getPlayerName(api);
-      const line = formatRollLine(playerName, request.expression, request.reason, roll.total);
+      const line = formatRollLine(
+        playerName,
+        request.expression,
+        request.reason,
+        roll.total,
+      );
 
       CanvasLog.appendLine(api, line);
       recordLocalResult(request, playerName, roll.total);
@@ -622,7 +664,8 @@
   }
 
   function getCurrentSummary() {
-    const expression = state.expression || state.lastExpression || DEFAULT_LAST_EXPRESSION;
+    const expression =
+      state.expression || state.lastExpression || DEFAULT_LAST_EXPRESSION;
     return expression;
   }
 
@@ -654,7 +697,9 @@
     }
     if (toggleButton) {
       toggleButton.textContent = state.expanded ? "▴" : "▸";
-      toggleButton.title = state.expanded ? "Collapse dice panel" : "Expand dice panel";
+      toggleButton.title = state.expanded
+        ? "Collapse dice panel"
+        : "Expand dice panel";
       toggleButton.setAttribute("aria-expanded", String(state.expanded));
     }
   }
@@ -673,13 +718,16 @@
       collapsedSummaryNode.textContent = getCurrentSummary();
     }
     if (collapsedResultNode) {
-      collapsedResultNode.textContent = isShowingLastRoll() ? `= ${state.lastResult}` : "";
+      collapsedResultNode.textContent = isShowingLastRoll()
+        ? `= ${state.lastResult}`
+        : "";
     }
   }
 
   function renderDicePool() {
     for (const [key, row] of dicePoolRows) {
-      const count = key === "modifier" ? state.modifier : state.dicePool[key] || 0;
+      const count =
+        key === "modifier" ? state.modifier : state.dicePool[key] || 0;
       row.count.textContent = count ? String(count) : "";
       row.minus.disabled = key === "modifier" ? false : count <= 0;
     }
@@ -769,7 +817,15 @@
     const rootNode = document.createElement("div");
     rootNode.id = "excalidraw-dice-root";
     rootNode.className = "excalidraw-dice-root";
-    for (const eventName of ["pointerdown", "mousedown", "click", "dblclick", "wheel", "keydown", "keyup"]) {
+    for (const eventName of [
+      "pointerdown",
+      "mousedown",
+      "click",
+      "dblclick",
+      "wheel",
+      "keydown",
+      "keyup",
+    ]) {
       rootNode.addEventListener(eventName, (event) => event.stopPropagation());
     }
     return rootNode;
@@ -797,7 +853,11 @@
 
     summary.append(collapsedSummaryNode, collapsedResultNode);
 
-    const headerRoll = createButton("Roll", "excalidraw-dice-roll", rollCurrent);
+    const headerRoll = createButton(
+      "Roll",
+      "excalidraw-dice-roll",
+      rollCurrent,
+    );
 
     header.append(toggleButton, summary, headerRoll);
     return header;
@@ -868,7 +928,12 @@
       }
     });
 
-    const modifierRow = createDicePoolRow("modifier", "+1", () => changeModifier(1), () => changeModifier(-1));
+    const modifierRow = createDicePoolRow(
+      "modifier",
+      "+1",
+      () => changeModifier(1),
+      () => changeModifier(-1),
+    );
     modifierRow.classList.add("excalidraw-dice-modifier");
     row.append(reasonInput, modifierRow);
     return row;
@@ -917,9 +982,8 @@
         display: flex;
         align-items: center;
         gap: 6px;
-        min-height: 38px;
-        padding: 6px;
-        border-top: 1px solid rgba(17, 24, 39, 0.12);
+        min-height: 36px;
+        padding: 3px 6px 3px;
       }
 
       .excalidraw-dice-toggle,
@@ -1005,6 +1069,7 @@
         flex: 0 1 auto;
         display: grid;
         grid-template-columns: auto minmax(0, 1fr);
+        align-items: stretch;
         gap: 8px;
         min-height: 0;
         overflow: hidden;
@@ -1017,14 +1082,19 @@
         gap: 6px;
         align-items: center;
         border-top: 1px solid rgba(17, 24, 39, 0.1);
-        padding: 6px 6px 6px;
+        padding: 6px 6px 0px;
       }
 
       .excalidraw-dice-modifier {
         display: grid;
-        grid-template-columns: 24px 46px;
+        grid-template-columns: 30px 58px;
         column-gap: 4px;
         align-items: center;
+      }
+
+      .excalidraw-dice-modifier .excalidraw-dice-minus,
+      .excalidraw-dice-modifier .excalidraw-dice-die {
+        height: 32px;
       }
 
       .excalidraw-dice-label {
@@ -1037,10 +1107,11 @@
 
       .excalidraw-dice-input {
         width: 100%;
+        height: 32px;
         box-sizing: border-box;
         border: 1px solid rgba(17, 24, 39, 0.18);
         border-radius: 4px;
-        padding: 7px;
+        padding: 6px;
         background: #ffffff;
         color: #111827;
         font: inherit;
@@ -1084,11 +1155,13 @@
       }
 
       .excalidraw-dice-controls {
-        display: grid;
-        grid-template-rows: minmax(0, auto) auto;
+        display: flex;
+        flex-direction: column;
+        grid-template-rows: auto auto;
         align-content: stretch;
-        gap: 7px;
         min-height: 100%;
+        max-height: 200px;
+        gap: 6px;
         min-width: 0;
       }
 
@@ -1098,12 +1171,12 @@
         align-content: start;
         gap: 4px;
         min-height: 0;
-        max-height: 156px;
         border-radius: 4px;
         background: rgba(17, 24, 39, 0.03);
-        padding: 4px;
+        padding: 6px;
         overflow-x: hidden;
         overflow-y: auto;
+        flex:1
       }
 
       .excalidraw-dice-history-item {
@@ -1157,11 +1230,6 @@
         border-color: rgba(249, 250, 251, 0.14);
         background: rgba(31, 41, 55, 0.96);
         box-shadow: 0 12px 36px rgba(0, 0, 0, 0.32);
-      }
-
-      html.dark .excalidraw-dice-header,
-      .theme--dark .excalidraw-dice-header {
-        border-top-color: rgba(249, 250, 251, 0.12);
       }
 
       html.dark .excalidraw-dice-reason-row,
@@ -1249,7 +1317,11 @@
     root = createRootNode();
     const card = document.createElement("div");
     card.className = "excalidraw-dice-card";
-    card.append(createExpandedPanelView(), createReasonRowView(), createHeaderView());
+    card.append(
+      createExpandedPanelView(),
+      createReasonRowView(),
+      createHeaderView(),
+    );
     root.append(card);
     document.body.append(root);
     console.info("[excalidraw-dice] UI mounted");
